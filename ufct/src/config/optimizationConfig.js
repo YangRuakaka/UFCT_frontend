@@ -124,8 +124,6 @@ export function applyPreset(component, presetName = 'MEDIUM') {
     maxRenderNodes: preset.maxRenderNodes,
     // ... 其他配置
   });
-
-  console.log(`已应用预设: ${preset.name}`);
 }
 
 /**

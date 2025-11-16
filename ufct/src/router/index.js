@@ -5,6 +5,7 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import CitationNetwork from '../views/CitationNetwork.vue';
 import AuthorCollaboration from '../views/AuthorCollaboration.vue';
+import PaperStatistics from '../views/PaperStatistics.vue';
 
 const routes = [
   {
@@ -20,6 +21,11 @@ const routes = [
     path: '/author-collaboration',
     name: 'AuthorCollaboration',
     component: AuthorCollaboration
+  },
+  {
+    path: '/paper-statistics',
+    name: 'PaperStatistics',
+    component: PaperStatistics
   }
 ];
 

@@ -4,11 +4,11 @@
 
 import axios from 'axios';
 
-const API_BASE_URL = process.env.VUE_APP_API_URL || 'http://localhost:5000/api';
+const API_BASE_URL = process.env.VUE_APP_API_URL || 'http://127.0.0.1:5000/api';
 
 const axiosInstance = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 30000,
+  timeout: 3000000,
   headers: {
     'Content-Type': 'application/json'
   }
@@ -16,21 +16,36 @@ const axiosInstance = axios.create({
 
 /**
  * 获取论文引用网络数据
- * @param {Object} params - 查询参数 { university, years, limit }
+ * @param {Object} params - 查询参数 { university, discipline, year_min, year_max, limit, min_citations }
  * @returns {Promise} 包含节点和链接的网络数据
  */
 export async function fetchCitationNetwork(params = {}) {
   try {
-    const response = await axiosInstance.get('/citation-network', { params });
+    // 转换参数格式以适应后端 API
+    const queryParams = {
+      year_min: params.year_min || 2020,
+      year_max: params.year_max || 2024,
+      limit: params.limit || 500
+    };
+    
+    // 可选参数
+    if (params.university) queryParams.university = params.university;
+    if (params.discipline) queryParams.discipline = params.discipline;
+    if (params.min_citations !== undefined) queryParams.min_citations = params.min_citations;
+
+    const response = await axiosInstance.get('/networks/citation', { params: queryParams });
+    
     return {
       success: true,
-      data: response.data
+      data: response.data.data
     };
   } catch (error) {
-    console.warn('后端不可用，使用本地 Mock 数据');
+    console.error('获取论文引用网络失败:', error.message);
+    console.error('错误详情:', error.response?.data || error.response || error);
     return {
-      success: true,
-      data: getMockCitationNetworkData()
+      success: false,
+      error: error.message,
+      data: { nodes: [], edges: [] }
     };
   }
 }
@@ -94,21 +109,36 @@ export function getMockCitationNetworkData() {
 
 /**
  * 获取作者协作网络数据
- * @param {Object} params - 查询参数 { university, years, limit }
+ * @param {Object} params - 查询参数 { university, discipline, year_min, year_max, limit, min_collaborations }
  * @returns {Promise} 包含节点和链接的网络数据
  */
 export async function fetchAuthorCollaborationNetwork(params = {}) {
   try {
-    const response = await axiosInstance.get('/author-collaboration-network', { params });
+    // 转换参数格式以适应后端 API
+    const queryParams = {
+      year_min: params.year_min || 2020,
+      year_max: params.year_max || 2024,
+      limit: params.limit || 500,
+      min_collaborations: params.min_collaborations || 1
+    };
+    
+    // 可选参数
+    if (params.university) queryParams.university = params.university;
+    if (params.discipline) queryParams.discipline = params.discipline;
+
+    const response = await axiosInstance.get('/networks/collaboration', { params: queryParams });
+    
     return {
       success: true,
-      data: response.data
+      data: response.data.data
     };
   } catch (error) {
-    console.warn('后端不可用，使用本地 Mock 数据');
+    console.error('获取作者协作网络失败:', error.message);
+    console.error('错误详情:', error.response?.data || error.response || error);
     return {
-      success: true,
-      data: getMockAuthorCollaborationData()
+      success: false,
+      error: error.message,
+      data: { nodes: [], edges: [] }
     };
   }
 }
@@ -216,9 +246,52 @@ export async function searchNodes(query, networkType = 'citation') {
   }
 }
 
+/**
+ * 获取论文统计数据 - T2 功能
+ * @param {Object} params - 查询参数 { university, year_min, year_max, cs_topics }
+ * @returns {Promise} 包含时间线和直方图数据
+ */
+export async function fetchPaperStatistics(params = {}) {
+  try {
+    const queryParams = {
+      year_min: params.year_min || 2015,
+      year_max: params.year_max || 2024
+    };
+    
+    // 可选参数
+    if (params.university) queryParams.university = params.university;
+    
+    // CS 相关学科
+    if (params.cs_topics && Array.isArray(params.cs_topics) && params.cs_topics.length > 0) {
+      queryParams.topics = params.cs_topics.join(',');
+    }
+
+    const response = await axiosInstance.get('/papers/statistics', { params: queryParams });
+    
+    return {
+      success: true,
+      data: response.data.data
+    };
+  } catch (error) {
+    console.error('Failed to fetch paper statistics:', error.message);
+    console.error('Error details:', error.response?.data || error.response || error);
+    return {
+      success: false,
+      error: error.message,
+      data: {
+        timeline: [],
+        global_histogram: [],
+        histogram_by_year: {},
+        metadata: null
+      }
+    };
+  }
+}
+
 export default {
   fetchCitationNetwork,
   fetchAuthorCollaborationNetwork,
   fetchNodeDetails,
-  searchNodes
+  searchNodes,
+  fetchPaperStatistics
 };

@@ -1,94 +1,76 @@
-/**
- * 网络图主容器组件 - 整合所有子组件
- */
-
 <template>
   <div class="network-graph-container">
-    <!-- 工具栏 -->
+    <!-- Toolbar -->
     <div class="toolbar">
       <div class="toolbar-left">
         <h2 class="graph-title">{{ title }}</h2>
       </div>
       <div class="toolbar-right">
-        <button class="btn btn-sm" @click="togglePause" :class="{ paused: isPaused }">
-          {{ isPaused ? '▶ 恢复' : '⏸ 暂停' }}
-        </button>
         <button class="btn btn-sm" @click="resetZoom">
-          🔄 重置视图
+          🔄 Reset View
         </button>
-        <button class="btn btn-sm" @click="exportImage">
-          💾 导出图片
+        <button class="btn btn-sm btn-danger" @click="clearGraph" title="Clear all nodes">
+          🗑️ Clear All
         </button>
         <button class="btn btn-sm" @click="showStats">
-          📊 统计信息
+          📊 Statistics
         </button>
       </div>
     </div>
 
-    <!-- 主容器 -->
+    <!-- Main Container -->
     <div class="main-content">
-      <!-- 左侧图例 -->
-      <div class="left-panel">
-        <Legend 
-          :colorScheme="colorScheme"
-          :colorDescription="colorDescription"
-        />
-        <OptimizationPanel 
-          :stats="optimizationStats"
-          :metrics="performanceMetrics"
-        />
-      </div>
-
-      <!-- 中央图表 -->
+      <!-- Central Chart -->
       <div class="center-panel">
         <div class="graph-wrapper">
           <div ref="graphContainer" class="graph-container"></div>
           <div v-if="isLoading" class="loading-overlay">
             <div class="spinner"></div>
-            <p>加载中...</p>
+            <p>Loading...</p>
           </div>
         </div>
       </div>
 
-      <!-- 右侧信息面板 -->
+      <!-- Right Info Panel -->
       <NodeInfoPanel 
         :node="selectedNode"
         :neighbors="selectedNodeNeighbors"
         :title="infoTitle"
+        :network-type="networkType"
         @close="selectedNode = null"
       />
     </div>
 
-    <!-- 统计信息对话框 -->
+    <!-- Statistics Modal -->
     <div v-if="showStatsModal" class="modal-overlay" @click="showStatsModal = false">
       <div class="modal-content" @click.stop>
         <div class="modal-header">
-          <h3>网络统计信息</h3>
+          <h3>Network Statistics</h3>
           <button class="close-btn" @click="showStatsModal = false">✕</button>
         </div>
         <div class="modal-body">
           <div class="stat-row">
-            <span class="stat-label">总节点数:</span>
+            <span class="stat-label">Total Nodes:</span>
             <span class="stat-value">{{ stats.totalNodes }}</span>
           </div>
           <div class="stat-row">
-            <span class="stat-label">总链接数:</span>
+            <span class="stat-label">Total Links:</span>
             <span class="stat-value">{{ stats.totalLinks }}</span>
           </div>
           <div class="stat-row">
-            <span class="stat-label">网络密度:</span>
+            <span class="stat-label">Network Density:</span>
             <span class="stat-value">{{ stats.density.toFixed(4) }}</span>
           </div>
           <div class="stat-row">
-            <span class="stat-label">平均度数:</span>
+            <span class="stat-label">Average Degree:</span>
             <span class="stat-value">{{ stats.avgDegree.toFixed(2) }}</span>
           </div>
           <div class="stat-row">
-            <span class="stat-label">最大度数:</span>
+            <span class="stat-label">Max Degree:</span>
             <span class="stat-value">{{ stats.maxDegree }}</span>
           </div>
           <div class="stat-row">
-            <span class="stat-label">最小度数:</span>
+            <span class="stat-label">Min Degree:</span>
             <span class="stat-value">{{ stats.minDegree }}</span>
           </div>
         </div>
@@ -98,18 +80,13 @@
 </template>
 
 <script>
-import * as d3 from 'd3';
-import { D3NetworkRenderer } from '../../utils/d3NetworkRenderer';
-import Legend from '../Shared/Legend.vue';
-import OptimizationPanel from '../Shared/OptimizationPanel.vue';
+import { WebGLNetworkRenderer } from '../../utils/webglNetworkRenderer';
 import NodeInfoPanel from './NodeInfoPanel.vue';
 import * as graphUtils from '../../utils/graphUtils';
 
 export default {
   name: 'NetworkGraph',
   components: {
-    Legend,
-    OptimizationPanel,
     NodeInfoPanel
   },
   props: {
@@ -131,11 +108,16 @@ export default {
     },
     colorDescription: {
       type: String,
-      default: '节点颜色根据其度数分配'
+      default: 'Node color is assigned based on its degree'
     },
     infoTitle: {
       type: String,
-      default: '节点信息'
+      default: 'Node Information'
+    },
+    networkType: {
+      type: String,
+      enum: ['citation', 'collaboration'],
+      default: 'citation'
     },
     enableOptimization: {
       type: Boolean,
@@ -144,6 +126,10 @@ export default {
     optimizationThreshold: {
       type: Number,
       default: 2
+    },
+    apiStats: {
+      type: Object,
+      default: null
     }
   },
   data() {
@@ -177,10 +163,10 @@ export default {
         minDegree: 0
       },
       resizeObserver: null,
-      performanceMonitor: null,
-      // 动态优化参数
       dynamicThreshold: 2,
-      maxRenderNodes: 2000
+      maxRenderNodes: 2000,
+      lastContainerWidth: 0,
+      lastContainerHeight: 0
     };
   },
   computed: {
@@ -200,7 +186,16 @@ export default {
         }
       });
       
-      return this.nodes.filter(node => neighborIds.has(node.id));
+      const neighbors = this.nodes.filter(node => neighborIds.has(node.id));
+      
+      // 🔍 调试日志
+      console.log('👥 selectedNodeNeighbors 计算完成:', {
+        selectedNodeId: this.selectedNode.id,
+        foundNeighborCount: neighbors.length,
+        neighbors: neighbors
+      });
+      
+      return neighbors;
     }
   },
   watch: {
@@ -231,9 +226,6 @@ export default {
     if (this.resizeObserver) {
       this.resizeObserver.disconnect();
     }
-    if (this.performanceMonitor) {
-      clearInterval(this.performanceMonitor);
-    }
   },
   methods: {
     initializeRenderer() {
@@ -243,13 +235,13 @@ export default {
       const width = container.clientWidth;
       const height = container.clientHeight;
 
-      this.renderer = new D3NetworkRenderer('.graph-container', {
+      this.renderer = new WebGLNetworkRenderer('.graph-container', {
         width,
         height,
         nodeRadius: 6,
-        linkDistance: 50,
-        chargeStrength: -300,
-        collideRadius: 8
+        linkDistance: 150,  // Further increase base link distance
+        chargeStrength: -1200,  // Significantly increase repulsion force
+        collideRadius: 12
       });
 
       this.renderer.initialize();
@@ -259,15 +251,15 @@ export default {
 
       this.isLoading = true;
 
-      // 清理数据
+      // Clean data
       let nodesToRender = graphUtils.cleanNodes(this.nodes);
       let linksToRender = graphUtils.cleanLinks(this.links);
 
-      // 根据节点数动态调整参数
+      // Dynamically adjust parameters based on node count
       const nodeCount = nodesToRender.length;
       this.adjustOptimizationParameters(nodeCount);
 
-      // 应用优化
+      // Apply optimization
       if (this.enableOptimization && nodesToRender.length > 100) {
         this.optimizationStats.initialNodes = nodesToRender.length;
         this.optimizationStats.initialLinks = linksToRender.length;
@@ -291,28 +283,38 @@ export default {
         this.optimizationStats.filteredLinks = linksToRender.length;
         this.optimizationStats.compressionRate = optimized.compressionRate || 0;
         
-        // 更新性能指标
+        // Update performance metrics
         this.performanceMetrics.optimizationLevel = optimized.optimizationLevel || 'none';
       }
 
-      // 计算样式
+      // Calculate styles - based on real node data (citation count, year, etc.)
       const degrees = graphUtils.calculateNodeDegrees(nodesToRender, linksToRender);
-      const sizes = graphUtils.calculateNodeSizes(degrees, 5, 30);
-      const colors = graphUtils.generateNodeColors(nodesToRender, linksToRender);
+      
+      // Calculate sizes using real node data
+      const sizes = this.calculateNodeSizesFromData(nodesToRender, degrees);
+      const colors = this.calculateNodeColorsFromData(nodesToRender);
 
-      // 渲染
+      // Render
       const startTime = performance.now();
 
       this.renderer.render(nodesToRender, linksToRender, {
         nodeRadius: (node) => sizes[node.id] || 6,
         nodeColor: (node) => colors[node.id] || '#1f77b4',
-        linkColor: () => '#999',
-        linkWidth: () => 1
+        linkColor: () => '#ccc',
+        linkWidth: (link) => this.calculateLinkWidth(link)
       });
 
-      // 添加节点点击事件监听
-      this.renderer.svg.selectAll('.node').on('click', (event, d) => {
-        this.selectedNode = d;
+      // Node click events in Canvas are registered via renderer.on()
+      this.renderer.on('nodeClick', (node) => {
+        console.log('🖱️ 节点被点击:', node);
+        console.log('📊 原始节点数据完整信息:', {
+          id: node.id,
+          label: node.label,
+          title: node.title,
+          all_keys: Object.keys(node),
+          full_object: node
+        });
+        this.selectedNode = node;
       });
 
       const endTime = performance.now();
@@ -320,16 +322,13 @@ export default {
       this.performanceMetrics.nodeCount = nodesToRender.length;
       this.performanceMetrics.linkCount = linksToRender.length;
 
-      // 计算统计信息
+      // Calculate statistics
       this.calculateStats(nodesToRender, linksToRender, degrees);
-
-      // 启动性能监视
-      this.startPerformanceMonitoring();
 
       this.isLoading = false;
     },
     /**
-     * 根据节点数动态调整优化参数
+     * Dynamically adjust optimization parameters based on node count
      */
     adjustOptimizationParameters(nodeCount) {
       if (nodeCount <= 500) {
@@ -349,106 +348,190 @@ export default {
         this.maxRenderNodes = 1200;
       }
     },
-    /**
-     * 启动性能监视
-     */
-    startPerformanceMonitoring() {
-      if (this.performanceMonitor) {
-        clearInterval(this.performanceMonitor);
-      }
-
-      let frameCount = 0;
-      let lastTime = performance.now();
-
-      this.performanceMonitor = setInterval(() => {
-        const currentTime = performance.now();
-        const deltaTime = (currentTime - lastTime) / 1000;
-        const fps = Math.round(frameCount / deltaTime);
-        
-        this.performanceMetrics.fps = Math.min(fps, 60);
-        
-        if (performance.memory) {
-          this.performanceMetrics.memory = Math.round(performance.memory.usedJSHeapSize / 1048576);
-        }
-
-        frameCount = 0;
-        lastTime = currentTime;
-      }, 1000);
-    },
     calculateStats(nodes, links, degrees) {
-      this.stats.totalNodes = nodes.length;
-      this.stats.totalLinks = links.length;
+      // Prefer API-returned statistics (calculated from original data)
+      if (this.apiStats) {
+        console.log('📊 Using API statistics:', this.apiStats);
+        
+        // Map API fields to local stats object
+        this.stats.totalNodes = this.apiStats.total_nodes || nodes.length;
+        this.stats.totalLinks = this.apiStats.total_edges || links.length;
+        this.stats.density = this.apiStats.network_density || this.calculateDensity(nodes.length, links.length);
+        this.stats.avgDegree = this.apiStats.avg_degree || this.calculateAvgDegree(degrees);
+        
+        // maxDegree and minDegree calculated locally (optimized nodes may be incomplete)
+        const degreeValues = Object.values(degrees);
+        this.stats.maxDegree = Math.max(...degreeValues, 0);
+        this.stats.minDegree = Math.min(...degreeValues, 0);
+        
+        console.log('✓ Statistics updated:', this.stats);
+      } else {
+        // If no API statistics, use local calculation
+        console.log('⚠ Using locally calculated statistics (no API statistics received)');
+        
+        this.stats.totalNodes = nodes.length;
+        this.stats.totalLinks = links.length;
 
+        const degreeValues = Object.values(degrees);
+        this.stats.maxDegree = Math.max(...degreeValues, 0);
+        this.stats.minDegree = Math.min(...degreeValues, 0);
+        this.stats.avgDegree = degreeValues.length > 0 
+          ? degreeValues.reduce((a, b) => a + b, 0) / degreeValues.length 
+          : 0;
+
+        // Calculate density: 2 * |E| / (|V| * (|V| - 1))
+        this.stats.density = this.calculateDensity(nodes.length, links.length);
+      }
+    },
+    calculateDensity(nodeCount, linkCount) {
+      if (nodeCount > 1) {
+        return (2 * linkCount) / (nodeCount * (nodeCount - 1));
+      }
+      return 0;
+    },
+    calculateAvgDegree(degrees) {
       const degreeValues = Object.values(degrees);
-      this.stats.maxDegree = Math.max(...degreeValues, 0);
-      this.stats.minDegree = Math.min(...degreeValues, 0);
-      this.stats.avgDegree = degreeValues.length > 0 
+      return degreeValues.length > 0 
         ? degreeValues.reduce((a, b) => a + b, 0) / degreeValues.length 
         : 0;
-
-      // 计算密度: 2 * |E| / (|V| * (|V| - 1))
-      if (nodes.length > 1) {
-        this.stats.density = (2 * links.length) / (nodes.length * (nodes.length - 1));
-      }
-    },
-    togglePause() {
-      this.isPaused = !this.isPaused;
-      if (this.isPaused) {
-        this.renderer?.pause();
-      } else {
-        this.renderer?.resume();
-      }
     },
     resetZoom() {
       if (this.renderer) {
-        const startTransform = d3.zoomIdentity
-          .translate(0, 0)
-          .scale(1);
-        
-        this.renderer.svg
-          .transition()
-          .duration(750)
-          .call(d3.zoom().transform, startTransform);
+        this.renderer.resetZoom();
       }
-    },
-    exportImage() {
-      if (!this.renderer || !this.renderer.svg) return;
-
-      const svg = this.renderer.svg.node();
-      const serializer = new XMLSerializer();
-      const svgString = serializer.serializeToString(svg);
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      const img = new Image();
-
-      canvas.width = svg.clientWidth;
-      canvas.height = svg.clientHeight;
-
-      img.onload = () => {
-        ctx.drawImage(img, 0, 0);
-        const link = document.createElement('a');
-        link.href = canvas.toDataURL('image/png');
-        link.download = `${this.title}-${Date.now()}.png`;
-        link.click();
-      };
-
-      img.src = 'data:image/svg+xml;base64,' + btoa(svgString);
     },
     showStats() {
       this.showStatsModal = true;
+    },
+    clearGraph() {
+      if (confirm('确定要清空所有节点吗？此操作无法撤销。')) {
+        if (this.renderer) {
+          this.renderer.clear();
+        }
+        // 不要直接修改来自父组件的 props（避免 vue/no-mutating-props）
+        // 通过事件通知父组件去清空数据；组件内部只清理渲染器与状态
+        // 如果父组件绑定了 v-model 或监听 'graph-cleared'，它应该处理实际的数据清空
+        this.selectedNode = null;
+        this.stats = {
+          totalNodes: 0,
+          totalLinks: 0,
+          density: 0,
+          avgDegree: 0,
+          maxDegree: 0,
+          minDegree: 0
+        };
+        this.optimizationStats = {
+          initialNodes: 0,
+          filteredNodes: 0,
+          initialLinks: 0,
+          filteredLinks: 0,
+          compressionRate: 0
+        };
+        this.$emit('graph-cleared');
+      }
+    },
+    /**
+     * 基于真实的节点数据（被引用次数）计算节点大小
+     * 使用对数尺度以处理高度倾斜的分布（许多低引用，少数极高引用）
+     */
+    calculateNodeSizesFromData(nodes) {
+      const sizes = {};
+      
+      if (nodes.length === 0) return sizes;
+
+      // 获取所有节点的引用次数
+      const citations = nodes.map(node => node.citations || node.citationCount || 0);
+      
+      // 使用对数尺度处理高度倾斜的数据
+      const logCitations = citations.map(c => Math.log10(c + 1));
+      const minLog = Math.min(...logCitations);
+      const maxLog = Math.max(...logCitations);
+      const logRange = maxLog - minLog || 1;
+
+      // 映射到 4-35 的大小范围
+      const MIN_SIZE = 4;
+      const MAX_SIZE = 35;
+      
+      nodes.forEach(node => {
+        const citation = node.citations || node.citationCount || 0;
+        const logCitation = Math.log10(citation + 1);
+        const normalized = (logCitation - minLog) / logRange;
+        sizes[node.id] = MIN_SIZE + normalized * (MAX_SIZE - MIN_SIZE);
+      });
+
+      return sizes;
+    },
+
+    /**
+     * 基于真实的节点数据计算节点颜色
+     * 使用HSL色轮从蓝色→青色→黄色→红色，表示被引用次数的递增
+     * 
+     * 颜色编码：
+     * - 蓝色 (240°): 0-100 引用
+     * - 青色 (180°): 100-1000 引用
+     * - 黄色 (60°): 1000-5000 引用
+     * - 红色 (0°): >5000 引用
+     */
+    calculateNodeColorsFromData(nodes) {
+      const colors = {};
+
+      if (nodes.length === 0) return colors;
+
+      // 使用对数尺度来确定颜色映射
+      const citations = nodes.map(n => n.citations || n.citationCount || 0);
+      const maxCitations = Math.max(...citations);
+      const logMax = Math.log10(maxCitations + 1);
+
+      nodes.forEach(node => {
+        const citation = node.citations || node.citationCount || 0;
+        
+        // 使用对数归一化
+        const normalized = Math.log10(citation + 1) / logMax; // 0-1
+        
+        // 从蓝色 (240°) 到红色 (0°) 的 HSL 色轮映射
+        // 逆序：240° (蓝) → 180° (青) → 60° (黄) → 0° (红)
+        const hue = 240 - normalized * 240;
+        const saturation = 80; // 保持饱和度
+        const lightness = 45 + normalized * 10; // 随着引用数增加，颜色稍微变浅
+        
+        colors[node.id] = `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+      });
+
+      return colors;
+    },
+
+    /**
+     * 计算边的宽度：基于权重（引用计数）
+     * 使用平方根尺度使差异更明显但不会过度
+     */
+    calculateLinkWidth(link) {
+      const weight = link.weight || 1;
+      // 权重 1 → 0.8px
+      // 权重 5 → 1.8px
+      // 权重 10+ → 2.8px
+      return 0.8 + Math.min(Math.sqrt(weight), 5) * 0.4;
     },
     setupResizeObserver() {
       const container = this.$refs.graphContainer;
       if (!container) return;
 
-      this.resizeObserver = new ResizeObserver(() => {
-        this.$nextTick(() => {
+      let resizeTimeout;
+      const debouncedResize = () => {
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(() => {
           const width = container.clientWidth;
           const height = container.clientHeight;
-          this.renderer?.resize(width, height);
-        });
-      });
+          
+          // 检查尺寸是否真的改变了，避免不必要的重新渲染
+          if (this.lastContainerWidth !== width || this.lastContainerHeight !== height) {
+            this.lastContainerWidth = width;
+            this.lastContainerHeight = height;
+            this.renderer?.resize(width, height);
+          }
+        }, 150);
+      };
 
+      this.resizeObserver = new ResizeObserver(debouncedResize);
       this.resizeObserver.observe(container);
     }
   }
@@ -512,20 +595,23 @@ export default {
   color: #ff9800;
 }
 
+.btn.btn-danger {
+  border-color: #f44336;
+  color: #f44336;
+}
+
+.btn.btn-danger:hover {
+  background: #ffebee;
+  border-color: #d32f2f;
+  color: #d32f2f;
+}
+
 .main-content {
   display: flex;
   flex: 1;
   overflow: hidden;
   gap: 12px;
   padding: 12px;
-}
-
-.left-panel {
-  width: 320px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
 }
 
 .center-panel {
